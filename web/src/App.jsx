@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import {
+  getHealth,
   getMetrics,
   getAtRisk,
   getTickets,
@@ -24,6 +25,13 @@ export default function App() {
   const [tickets, setTickets] = useState([]);
   const [subject, setSubject] = useState("");
   const [error, setError] = useState(null);
+  const [actionError, setActionError] = useState(null);
+  // The API reports read-only mode (public demo); hide write controls then.
+  const [readOnly, setReadOnly] = useState(false);
+
+  useEffect(() => {
+    getHealth().then((h) => setReadOnly(Boolean(h.read_only))).catch(() => {});
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -50,13 +58,23 @@ export default function App() {
   async function onCreate(e) {
     e.preventDefault();
     if (!subject.trim()) return;
-    await createTicket(subject.trim());
-    setSubject("");
+    try {
+      await createTicket(subject.trim());
+      setSubject("");
+      setActionError(null);
+    } catch (err) {
+      setActionError(err.message); // e.g. 429 rate limit, 403 read-only
+    }
     refresh();
   }
 
   async function onResolve(id) {
-    await resolveTicket(id);
+    try {
+      await resolveTicket(id);
+      setActionError(null);
+    } catch (err) {
+      setActionError(err.message);
+    }
     refresh();
   }
 
@@ -68,6 +86,8 @@ export default function App() {
       </header>
 
       {error && <div className="error">API unreachable: {error}</div>}
+      {actionError && <div className="error">Action failed: {actionError}</div>}
+      {readOnly && <div className="readonly">Read-only demo: creating and resolving tickets is disabled.</div>}
 
       {metrics && (
         <section className="stats">
@@ -80,14 +100,16 @@ export default function App() {
         </section>
       )}
 
-      <form className="new" onSubmit={onCreate}>
-        <input
-          value={subject}
-          onChange={(e) => setSubject(e.target.value)}
-          placeholder="New ticket subject (auto-classified on submit)…"
-        />
-        <button type="submit">Add</button>
-      </form>
+      {!readOnly && (
+        <form className="new" onSubmit={onCreate}>
+          <input
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            placeholder="New ticket subject (auto-classified on submit)…"
+          />
+          <button type="submit">Add</button>
+        </form>
+      )}
 
       <section>
         <h2>At risk ({atRisk.length})</h2>
@@ -122,7 +144,7 @@ export default function App() {
                 <td>{t.subject}</td>
                 <td>{t.resolved ? "resolved" : "open"}</td>
                 <td>
-                  {!t.resolved && (
+                  {!t.resolved && !readOnly && (
                     <button className="link" onClick={() => onResolve(t.id)}>resolve</button>
                   )}
                 </td>

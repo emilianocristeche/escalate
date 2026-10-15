@@ -9,10 +9,21 @@ import pytest
 from app import llm_classifier
 
 
-def _fake_anthropic(monkeypatch, reply=None, exc=None):
-    """Install a stub `anthropic` whose messages.create returns `reply` or raises `exc`."""
+def _fake_anthropic(monkeypatch, reply=None, exc=None, enable=True):
+    """Install a stub `anthropic` whose messages.create returns `reply` or raises `exc`.
+
+    Also opts in to the LLM (ESCALATE_ENABLE_LLM) unless enable=False. Returns
+    the list of create() calls so tests can assert whether the SDK was hit.
+    """
+    calls = []
+    if enable:
+        monkeypatch.setenv("ESCALATE_ENABLE_LLM", "true")
+    else:
+        monkeypatch.delenv("ESCALATE_ENABLE_LLM", raising=False)
+
     class _Messages:
         def create(self, **kwargs):
+            calls.append(kwargs)
             if exc is not None:
                 raise exc
             block = types.SimpleNamespace(text=reply)
@@ -24,6 +35,28 @@ def _fake_anthropic(monkeypatch, reply=None, exc=None):
     mod = types.ModuleType("anthropic")
     mod.Anthropic = lambda: _Client()
     monkeypatch.setitem(sys.modules, "anthropic", mod)
+    return calls
+
+
+def test_llm_disabled_by_default_never_calls_sdk(monkeypatch):
+    # A key alone must not turn the LLM on: the opt-in flag is required.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    calls = _fake_anthropic(monkeypatch, reply='{"severity": "P1", "category": "billing"}',
+                            enable=False)
+    assert llm_classifier.available() is False
+    r = llm_classifier.classify_llm_or_rules("How do I export invoices?")
+    assert r == {"severity": "P4", "category": "billing", "source": "rules"}
+    assert calls == []
+    with pytest.raises(RuntimeError):
+        llm_classifier.classify_llm("x")
+
+
+def test_llm_available_only_with_flag_and_key(monkeypatch):
+    _fake_anthropic(monkeypatch, reply="{}")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert llm_classifier.available() is False
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    assert llm_classifier.available() is True
 
 
 def test_valid_llm_reply_is_used(monkeypatch):

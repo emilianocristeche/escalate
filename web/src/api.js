@@ -8,6 +8,7 @@ async function req(path, opts) {
   return r.json();
 }
 
+export const getHealth = () => req("/health");
 export const getMetrics = () => req("/metrics");
 export const getAtRisk = () => req("/tickets/at-risk");
 export const getTickets = () => req("/tickets?limit=100");

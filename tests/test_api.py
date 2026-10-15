@@ -1,47 +1,8 @@
-"""API tests against an in-memory SQLite DB (zero infra)."""
+"""API tests against an in-memory SQLite DB (zero infra). Fixtures: conftest.py."""
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
-from app.db import Base, get_db
-from app.main import app
 from app.models import Ticket
-
-
-@pytest.fixture()
-def session_factory():
-    # Fresh in-memory DB per test. StaticPool keeps ONE connection so every
-    # session sees the same in-memory database (otherwise each connection gets
-    # its own empty DB and the tables "disappear").
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    TestingSession = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    Base.metadata.create_all(bind=engine)
-    return TestingSession
-
-
-@pytest.fixture()
-def client(session_factory):
-    def override_get_db():
-        s = session_factory()
-        try:
-            yield s
-        finally:
-            s.close()
-
-    app.dependency_overrides[get_db] = override_get_db
-    # main.lifespan calls init_db() on the real engine; harmless, but skip network.
-    with TestClient(app) as c:
-        yield c
-    app.dependency_overrides.clear()
 
 
 def _backdate(session_factory, ticket_id, created):

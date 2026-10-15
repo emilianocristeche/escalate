@@ -5,7 +5,8 @@ markdown table of accuracy / latency / cost. The hybrid uses the rules'
 confidence flag to route only low-confidence tickets to the LLM.
 
 Usage:
-  python -m app.benchmark              # rules always; LLM+hybrid if ANTHROPIC_API_KEY set
+  python -m app.benchmark              # rules always; LLM+hybrid if ESCALATE_ENABLE_LLM=true
+                                       # and ANTHROPIC_API_KEY are set
   python -m app.benchmark --mock-llm   # verify the harness with a stubbed "perfect" LLM
 
 Cost model: Haiku pricing (~$1/Mtok in, $5/Mtok out). Overridable via env
@@ -122,7 +123,8 @@ def main() -> None:
               "(see warnings above); those rows are partly rules-scored._")
 
     if llm_fn is None:
-        print("\n_LLM rows skipped: set ANTHROPIC_API_KEY (and `pip install anthropic`), "
+        print("\n_LLM rows skipped: set ESCALATE_ENABLE_LLM=true and ANTHROPIC_API_KEY "
+              "(and `pip install anthropic`), "
               "or run with `--mock-llm` to verify the harness._")
 
 

@@ -6,11 +6,15 @@ Routes:
   POST /tickets/{id}/resolve  mark resolved
   GET  /tickets/at-risk    open tickets breaching within ?window_min (default 30)
   GET  /metrics            aggregate queue health
-  GET  /health             liveness probe
+  GET  /health             liveness probe (+ whether the API is read-only)
+
+Writes go through security.guard_write: rate-limited per client IP and
+disabled entirely when ESCALATE_READ_ONLY=true.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -20,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import classifier, metrics, sla
+from app import classifier, metrics, security, sla
 from app.db import get_db, init_db
 from app.models import Ticket
 from app.schemas import Metrics, TicketCreate, TicketOut, TicketRisk
@@ -38,23 +42,33 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Escalate", version="0.1.0", lifespan=lifespan)
 
-# Dashboard is a separate origin (Vercel). Default to open; lock down in prod via
-# CORS_ORIGINS="https://your-dashboard.vercel.app" (comma-separated).
-_origins = os.getenv("CORS_ORIGINS", "*").split(",")
+log = logging.getLogger(__name__)
+
+# Dashboard is a separate origin (Vercel). Only listed origins may call the API
+# from a browser: set CORS_ORIGINS="https://your-dashboard.vercel.app"
+# (comma-separated). The default only allows the local Vite dev server.
+# CORS is a browser rule, not access control: scripts/curl ignore it, which is
+# why writes are also rate-limited and can be disabled (security.py).
+_DEFAULT_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
+_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", _DEFAULT_ORIGINS).split(",") if o.strip()]
+if "*" in _origins:
+    log.warning("CORS_ORIGINS contains '*': any website can call this API from a browser")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in _origins],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_origins,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    # The dashboard reads read_only to hide the create/resolve controls.
+    return {"status": "ok", "read_only": security.read_only()}
 
 
-@app.post("/tickets", response_model=TicketOut, status_code=201)
+@app.post("/tickets", response_model=TicketOut, status_code=201,
+          dependencies=[Depends(security.guard_write)])
 def create_ticket(payload: TicketCreate, db: Session = Depends(get_db)):
     labels = classifier.classify(payload.subject, payload.body)
     ticket = Ticket(
@@ -89,7 +103,8 @@ def list_tickets(
     return list(db.scalars(stmt))
 
 
-@app.post("/tickets/{ticket_id}/resolve", response_model=TicketOut)
+@app.post("/tickets/{ticket_id}/resolve", response_model=TicketOut,
+          dependencies=[Depends(security.guard_write)])
 def resolve_ticket(ticket_id: int, db: Session = Depends(get_db)):
     ticket = db.get(Ticket, ticket_id)
     if ticket is None:
