@@ -10,10 +10,11 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
+from app.models import Ticket
 
 
 @pytest.fixture()
-def client():
+def session_factory():
     # Fresh in-memory DB per test. StaticPool keeps ONE connection so every
     # session sees the same in-memory database (otherwise each connection gets
     # its own empty DB and the tables "disappear").
@@ -24,9 +25,13 @@ def client():
     )
     TestingSession = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     Base.metadata.create_all(bind=engine)
+    return TestingSession
 
+
+@pytest.fixture()
+def client(session_factory):
     def override_get_db():
-        s = TestingSession()
+        s = session_factory()
         try:
             yield s
         finally:
@@ -39,8 +44,12 @@ def client():
     app.dependency_overrides.clear()
 
 
-def _iso(dt):
-    return dt.isoformat()
+def _backdate(session_factory, ticket_id, created):
+    # created_at is server-set and not part of the public API, so tests that
+    # need an old ticket rewind it directly in the DB.
+    with session_factory() as s:
+        s.get(Ticket, ticket_id).created_at = created
+        s.commit()
 
 
 def test_create_ticket_autoclassifies(client):
@@ -52,12 +61,17 @@ def test_create_ticket_autoclassifies(client):
     assert data["resolved"] is False
 
 
-def test_at_risk_lists_soon_to_breach(client):
+def test_create_ticket_rejects_client_created_at(client):
+    created = datetime.now(timezone.utc) - timedelta(days=3)
+    r = client.post("/tickets", json={"subject": "x", "created_at": created.isoformat()})
+    assert r.status_code == 422
+
+
+def test_at_risk_lists_soon_to_breach(client, session_factory):
     # P1 budget is 60 min; created 55 min ago -> 5 min to breach -> at risk.
     created = datetime.now(timezone.utc) - timedelta(minutes=55)
-    client.post("/tickets", json={
-        "subject": "Card reader outage", "created_at": _iso(created),
-    })
+    tid = client.post("/tickets", json={"subject": "Card reader outage"}).json()["id"]
+    _backdate(session_factory, tid, created)
     # A fresh P4 ticket is nowhere near breach -> not at risk.
     client.post("/tickets", json={"subject": "How do I export invoices?"})
 
@@ -69,12 +83,10 @@ def test_at_risk_lists_soon_to_breach(client):
     assert rows[0]["minutes_to_breach"] <= 30
 
 
-def test_resolve_removes_from_metrics_breach(client):
+def test_resolve_removes_from_metrics_breach(client, session_factory):
     created = datetime.now(timezone.utc) - timedelta(minutes=200)  # P1 breached long ago
-    post = client.post("/tickets", json={
-        "subject": "Total outage everyone affected", "created_at": _iso(created),
-    })
-    tid = post.json()["id"]
+    tid = client.post("/tickets", json={"subject": "Total outage everyone affected"}).json()["id"]
+    _backdate(session_factory, tid, created)
 
     m1 = client.get("/metrics").json()
     assert m1["breached_open"] == 1

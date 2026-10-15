@@ -63,7 +63,7 @@ def create_ticket(payload: TicketCreate, db: Session = Depends(get_db)):
         customer=payload.customer,
         severity=labels["severity"],
         category=labels["category"],
-        created_at=payload.created_at or _now(),
+        created_at=_now(),
     )
     db.add(ticket)
     db.commit()

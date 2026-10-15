@@ -13,7 +13,12 @@ lift at a fraction of the latency and cost.
 from __future__ import annotations
 
 import json
+import logging
 import os
+
+from app import classifier
+
+log = logging.getLogger(__name__)
 
 SEVERITIES = ("P1", "P2", "P3", "P4")
 CATEGORIES = ("billing", "connectivity", "api", "account", "general")
@@ -61,3 +66,19 @@ def classify_llm(subject: str, body: str = "") -> dict[str, str]:
     if cat not in CATEGORIES:
         cat = "general"
     return {"severity": sev, "category": cat}
+
+
+def classify_llm_or_rules(subject: str, body: str = "") -> dict[str, str]:
+    """LLM classification with a logged fallback to the rule-based classifier.
+
+    Any LLM failure (API error, timeout, non-JSON or truncated reply, missing
+    SDK) is logged with its traceback and the ticket is classified by rules
+    instead, so one bad response never drops a ticket. `source` says which
+    path produced the labels ("llm" or "rules_fallback").
+    """
+    try:
+        return {**classify_llm(subject, body), "source": "llm"}
+    except Exception:
+        log.warning("LLM classification failed for %r; falling back to rules",
+                    subject, exc_info=True)
+        return {**classifier.classify(subject, body), "source": "rules_fallback"}

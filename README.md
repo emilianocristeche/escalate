@@ -7,8 +7,6 @@ before they do.
 Built by a Tier 2 support engineer who watched SLA breaches happen because
 nobody could see them coming. So this is the tool that predicts them.
 
-> Portfolio project — see [`../escalate-spec.md`](../escalate-spec.md) for the full brief.
-
 ---
 
 ## Stack
@@ -48,22 +46,72 @@ Interactive docs (Swagger) at `/docs`.
 
 ### Example: `/metrics` after seeding
 
+Real output of `python -m app.seed` followed by `curl -s localhost:8000/metrics | python -m json.tool`:
+
 ```json
 {
-  "total": 10, "open": 10, "resolved": 0,
-  "breached_open": 1, "at_risk": 2, "breach_rate": 0.1,
-  "by_category": {"billing": 3, "connectivity": 2, "api": 2, "general": 2, "account": 1},
-  "by_severity": {"P1": 2, "P2": 2, "P3": 4, "P4": 2},
-  "mttr_minutes": null
+    "total": 10,
+    "open": 10,
+    "resolved": 0,
+    "breached_open": 1,
+    "at_risk": 2,
+    "breach_rate": 0.1,
+    "by_category": {
+        "billing": 3,
+        "general": 2,
+        "connectivity": 2,
+        "api": 2,
+        "account": 1
+    },
+    "by_severity": {
+        "P1": 2,
+        "P3": 4,
+        "P2": 2,
+        "P4": 2
+    },
+    "mttr_minutes": null
 }
 ```
 
 ### Example: `/tickets/at-risk`
 
+Real output of `curl -s localhost:8000/tickets/at-risk | python -m json.tool`, taken
+a few seconds after seeding (so `minutes_to_breach` depends on when you call it):
+
+```json
+[
+    {
+        "id": 1,
+        "subject": "Payments API returning 500 for all customers",
+        "body": "Every charge fails since 10am",
+        "customer": "acme-co",
+        "severity": "P1",
+        "category": "billing",
+        "resolved": false,
+        "created_at": "2026-10-15T22:19:43.028163",
+        "resolved_at": null,
+        "minutes_to_breach": 4.8,
+        "deadline": "2026-10-15T23:19:43.028163Z"
+    },
+    {
+        "id": 2,
+        "subject": "Cannot pay \u2014 card reader offline",
+        "body": "Terminal shows outage",
+        "customer": "bluebird-cafe",
+        "severity": "P1",
+        "category": "general",
+        "resolved": false,
+        "created_at": "2026-10-15T22:34:43.028163",
+        "resolved_at": null,
+        "minutes_to_breach": 19.8,
+        "deadline": "2026-10-15T23:34:43.028163Z"
+    }
+]
 ```
-P1 | Payments API returning 500 for all customers | breach in 5.0 min
-P1 | Cannot pay - card reader offline             | breach in 20.0 min
-```
+
+`created_at` is always set by the server. `POST /tickets` rejects it (and any
+other unknown field) with a `422`, so a client cannot backdate a ticket to fake
+or hide an SLA breach.
 
 ## Dashboard
 
@@ -81,11 +129,15 @@ For production, set `VITE_API_URL` to your deployed API URL at build time.
 ## Classification: rules vs LLM
 
 **v1 — rule-based** ([`app/classifier.py`](app/classifier.py)): keyword heuristics
-map text → severity (P1–P4) + category. Instant, free, deterministic, fully tested.
+map text → severity (P1–P4) + category. Keywords match on word boundaries with an
+optional plural (`outage` matches "outages" but `down` does not match "download").
+Instant, free, deterministic, fully tested.
 
 **v2 — LLM classifier** ([`app/llm_classifier.py`](app/llm_classifier.py), optional):
 handles ambiguous / mixed-language tickets the rules miss. Requires
-`ANTHROPIC_API_KEY` + `pip install anthropic`.
+`ANTHROPIC_API_KEY` + `pip install anthropic`. If a call fails (API error, timeout,
+non-JSON or truncated reply), the failure is logged as a warning with its traceback
+and the ticket falls back to the rules; the benchmark reports how many calls did.
 
 **Hybrid** routes only *low-confidence* tickets to the LLM. Confidence proxy: the
 rules are "confident" when a keyword actually matched, "guessing" when they fell
@@ -127,7 +179,7 @@ deadline; **breached** once past it. All math is on timezone-aware UTC.
 ## Tests
 
 ```bash
-pytest -q                 # 16 tests
+pytest -q                 # 28 tests
 python app/classifier.py  # zero-dependency self-check
 python app/sla.py         # zero-dependency self-check
 ```
@@ -167,6 +219,10 @@ web/                  React + Vite dashboard
 - [x] React dashboard (queue + at-risk + live metrics)
 - [x] Deploy configs (Render blueprint + Vercel)
 - [ ] Push live + record a 2-min demo video
+
+## What I Learned
+
+_TODO: section to be written by the author._
 
 ## Note
 

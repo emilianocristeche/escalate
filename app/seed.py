@@ -1,6 +1,6 @@
 """Seed the DB with synthetic tickets so the dashboard and /metrics have data.
 
-SYNTHETIC ONLY — never seed with real customer or Movistar data.
+SYNTHETIC ONLY — never seed with real customer data.
 
 Run: python -m app.seed
 """
