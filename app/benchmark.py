@@ -5,7 +5,8 @@ markdown table of accuracy / latency / cost. The hybrid uses the rules'
 confidence flag to route only low-confidence tickets to the LLM.
 
 Usage:
-  python -m app.benchmark              # rules always; LLM+hybrid if ANTHROPIC_API_KEY set
+  python -m app.benchmark              # rules always; LLM+hybrid if ESCALATE_ENABLE_LLM=true
+                                       # and ANTHROPIC_API_KEY are set
   python -m app.benchmark --mock-llm   # verify the harness with a stubbed "perfect" LLM
 
 Cost model: Haiku pricing (~$1/Mtok in, $5/Mtok out). Overridable via env
@@ -14,6 +15,7 @@ ESCALATE_LLM_IN_COST / ESCALATE_LLM_OUT_COST.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import time
@@ -78,6 +80,7 @@ def _pct(x: float) -> str:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     mock = "--mock-llm" in sys.argv
     n = len(LABELED)
 
@@ -88,6 +91,7 @@ def main() -> None:
 
     llm_fn = None
     label = None
+    fallbacks = []  # tickets where the real LLM failed and rules answered
     if mock:
         # Stub "perfect oracle" — verifies the harness; not a real accuracy claim.
         def llm_fn(subj, body, gold_s, gold_c):  # noqa: E731
@@ -95,7 +99,10 @@ def main() -> None:
         label = "MOCK (perfect oracle)"
     elif llm_classifier.available():
         def llm_fn(subj, body, gold_s, gold_c):  # noqa: E731
-            return llm_classifier.classify_llm(subj, body)
+            r = llm_classifier.classify_llm_or_rules(subj, body)
+            if r["source"] == "rules_fallback":
+                fallbacks.append(subj)
+            return r
         label = os.getenv("ESCALATE_LLM_MODEL", "claude-haiku-4-5")
 
     if llm_fn is not None:
@@ -111,8 +118,13 @@ def main() -> None:
         print(f"| {name} | {_pct(sc['severity'])} | {_pct(sc['category'])} | "
               f"{_pct(sc['both'])} | {ms:.1f} ms | {llm_calls}/{n} | ${cost:.4f} |")
 
+    if fallbacks:
+        print(f"\n_{len(fallbacks)} LLM call(s) failed and fell back to rules "
+              "(see warnings above); those rows are partly rules-scored._")
+
     if llm_fn is None:
-        print("\n_LLM rows skipped: set ANTHROPIC_API_KEY (and `pip install anthropic`), "
+        print("\n_LLM rows skipped: set ESCALATE_ENABLE_LLM=true and ANTHROPIC_API_KEY "
+              "(and `pip install anthropic`), "
               "or run with `--mock-llm` to verify the harness._")
 
 

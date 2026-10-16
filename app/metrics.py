@@ -1,12 +1,23 @@
-"""Aggregate metrics over a list of tickets. Pure function of (tickets, now)
-so it is trivially testable without a database."""
+"""Queue-health metrics.
+
+compute_metrics_db() is what GET /metrics uses: it runs aggregate queries
+(COUNT / SUM(CASE ...) / GROUP BY / AVG) so the database does the work and
+no ticket rows are loaded into Python, however big the table gets.
+
+compute_metrics() is the same calculation as a pure function over a list of
+tickets. It is the readable reference: the tests check that both agree.
+"""
 
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy.orm import Session
 
 from app import sla
+from app.models import Ticket
 
 
 def compute_metrics(tickets, now: datetime) -> dict:
@@ -45,4 +56,63 @@ def compute_metrics(tickets, now: datetime) -> dict:
         "by_category": dict(Counter(t.category for t in tickets)),
         "by_severity": dict(Counter(t.severity for t in tickets)),
         "mttr_minutes": mttr,
+    }
+
+
+def _count_if(condition):
+    return func.coalesce(func.sum(case((condition, 1), else_=0)), 0)
+
+
+def compute_metrics_db(db: Session, now: datetime,
+                       window_min: int = sla.DEFAULT_RISK_WINDOW_MIN) -> dict:
+    """Same payload as compute_metrics(), computed with aggregate SQL.
+
+    A ticket's deadline is created_at + budget(severity), so for each severity
+    "breached" is created_at < now - budget and "at risk" (0 <= minutes to
+    breach <= window) is now - budget <= created_at <= now - budget + window.
+    Severities without a budget fall back to the P3 budget, as in sla.py.
+    """
+    window = timedelta(minutes=window_min)
+    known = list(sla.SLA_MINUTES)
+    groups = [(Ticket.severity == sev, now - timedelta(minutes=sla.sla_minutes(sev)))
+              for sev in known]
+    groups.append((Ticket.severity.not_in(known),
+                   now - timedelta(minutes=sla.sla_minutes("P3"))))
+
+    is_open = Ticket.resolved.is_(False)
+    breached = or_(*[and_(sev, Ticket.created_at < cutoff) for sev, cutoff in groups])
+    at_risk = or_(*[and_(sev, Ticket.created_at >= cutoff, Ticket.created_at <= cutoff + window)
+                    for sev, cutoff in groups])
+
+    total, resolved, breached_open, at_risk_open = db.execute(select(
+        func.count(Ticket.id),
+        _count_if(Ticket.resolved.is_(True)),
+        _count_if(and_(is_open, breached)),
+        _count_if(and_(is_open, at_risk)),
+    )).one()
+    open_count = total - resolved
+
+    by_category = dict(db.execute(
+        select(Ticket.category, func.count(Ticket.id)).group_by(Ticket.category)).all())
+    by_severity = dict(db.execute(
+        select(Ticket.severity, func.count(Ticket.id)).group_by(Ticket.severity)).all())
+
+    # Resolution time in minutes; date arithmetic differs per database.
+    if db.get_bind().dialect.name == "sqlite":
+        minutes = (func.julianday(Ticket.resolved_at) - func.julianday(Ticket.created_at)) * 1440.0
+    else:
+        minutes = func.extract("epoch", Ticket.resolved_at - Ticket.created_at) / 60.0
+    mttr = db.scalar(select(func.avg(minutes))
+                     .where(Ticket.resolved.is_(True), Ticket.resolved_at.is_not(None)))
+
+    return {
+        "total": total,
+        "open": open_count,
+        "resolved": resolved,
+        "breached_open": breached_open,
+        "at_risk": at_risk_open,
+        "breach_rate": round(breached_open / open_count, 3) if open_count else 0.0,
+        "by_category": by_category,
+        "by_severity": by_severity,
+        "mttr_minutes": round(float(mttr), 1) if mttr is not None else None,
     }

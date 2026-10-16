@@ -13,7 +13,13 @@ services:
           name: escalate-db
           property: connectionString
       - key: CORS_ORIGINS
-        sync: false   # set to your Vercel dashboard URL after it deploys
+        sync: false   # set to your Vercel dashboard URL, e.g. https://escalate-alpha.vercel.app
+      - key: ESCALATE_TRUST_PROXY
+        value: "true"   # Render is a reverse proxy: rate-limit by X-Forwarded-For
+      - key: ESCALATE_ENABLE_LLM
+        value: "false"  # LLM classifier stays off unless explicitly enabled
+      - key: ESCALATE_READ_ONLY
+        sync: false   # "true" makes the public deploy a read-only demo
 
 databases:
   - name: escalate-db

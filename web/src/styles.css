@@ -48,3 +48,4 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; }
 .sev-p4 { background: #374151; color: #d1d5db; }
 
 .error { background: #7f1d1d; color: #fecaca; padding: 10px 12px; border-radius: 8px; }
+.readonly { background: #1e3a5f; color: #bfdbfe; padding: 10px 12px; border-radius: 8px; }

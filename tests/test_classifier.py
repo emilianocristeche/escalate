@@ -41,3 +41,23 @@ def test_classify_combined():
         "severity": "P2",  # "500" is a P2 keyword
         "category": "billing",  # "payments"/"charges" -> billing
     }
+
+
+def test_keywords_match_plurals():
+    assert classifier.classify_severity("Multiple outages since this morning") == "P1"
+    assert classifier.classify_severity("Two breaches reported") == "P1"
+    assert classifier.classify_severity("Seeing timeouts on checkout") == "P2"
+    assert classifier.classify_category("Duplicate charges on my card") == "billing"
+    assert classifier.classify_category("Our webhooks stopped") == "api"
+
+
+def test_keywords_respect_word_boundaries():
+    # Substring matching used to fire on these ("down" in "download", "sim" in
+    # "simple", "api" in "rapid", "500" in "1500").
+    assert classifier.classify_severity("How to download the report") == "P4"
+    assert classifier.classify_category("A simple rapid question") == "general"
+    assert classifier.classify_severity("Imported 1500 contacts fine") == "P3"
+
+
+def test_listed_inflections_still_match():
+    assert classifier.classify_severity("The app crashed again") == "P2"
