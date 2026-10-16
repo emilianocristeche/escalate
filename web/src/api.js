@@ -7,13 +7,17 @@ const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 // instance boots (~30–60 s), and occasionally fails instead of answering.
 const REQUEST_TIMEOUT_MS = 20000;
 
-async function req(path, opts = {}) {
+// The dashboard never calls /health: some browser blockers drop any request
+// whose path contains "health", which would leave it stuck on "Waking up".
+// Wake-up is detected from the first data response (/tickets), and read-only
+// mode from the X-Read-Only header the API adds to every response.
+async function send(path, opts = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
   try {
     const r = await fetch(`${BASE}${path}`, { ...opts, signal: ctrl.signal });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-    return r.json();
+    return { body: await r.json(), headers: r.headers };
   } catch (e) {
     if (e.name === "AbortError") throw new Error("request timed out");
     throw e;
@@ -22,10 +26,18 @@ async function req(path, opts = {}) {
   }
 }
 
-export const getHealth = () => req("/health");
+async function req(path, opts) {
+  return (await send(path, opts)).body;
+}
+
+// Tickets plus whether the API is read-only (null if the header is missing).
+export async function getTickets() {
+  const { body, headers } = await send("/tickets?limit=100");
+  const ro = headers.get("X-Read-Only");
+  return { tickets: body, readOnly: ro === null ? null : ro === "true" };
+}
 export const getMetrics = () => req("/metrics");
 export const getAtRisk = () => req("/tickets/at-risk");
-export const getTickets = () => req("/tickets?limit=100");
 export const createTicket = (subject) =>
   req("/tickets", {
     method: "POST",
