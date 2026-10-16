@@ -46,7 +46,8 @@ def client(session_factory):
 def _clean_security_state(monkeypatch):
     # Rate-limit counters are process-global; env flags must not leak between tests.
     for var in ("ESCALATE_READ_ONLY", "ESCALATE_WRITE_RATE_LIMIT",
-                "ESCALATE_RATE_WINDOW_SEC", "ESCALATE_TRUST_PROXY", "ESCALATE_ENABLE_LLM"):
+                "ESCALATE_RATE_WINDOW_SEC", "ESCALATE_TRUST_PROXY", "ESCALATE_ENABLE_LLM",
+                "ESCALATE_SEED_DEMO"):
         monkeypatch.delenv(var, raising=False)
     write_limiter.reset()
     yield

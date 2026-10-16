@@ -1,5 +1,8 @@
-fastapi>=0.115
-uvicorn[standard]>=0.30
-sqlalchemy>=2.0
-pydantic>=2.7
-psycopg2-binary>=2.9
+# Pinned to the versions the test suite runs against. SQLAlchemy and the
+# Postgres driver especially: SQLAlchemy 2.1 changed the default driver for
+# postgresql:// URLs (app/db.py pins psycopg2 explicitly either way).
+fastapi==0.143.3
+uvicorn[standard]==0.54.0
+sqlalchemy==2.1.4
+pydantic==2.14.1
+psycopg2-binary==2.9.13

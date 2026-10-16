@@ -14,4 +14,6 @@ RUN useradd --create-home --uid 10001 app && chown app:app /app
 USER app
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# One worker on purpose: the in-memory rate limiter and the SQLite demo DB
+# (reseeded at startup, app/demo_seed.py) assume a single process.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
