@@ -18,6 +18,44 @@ jobs:
       - run: pytest -q
       - run: python -m app.benchmark --mock-llm   # benchmark harness smoke
 
+  postgres:
+    # Production runs on Postgres: the aggregate /metrics SQL (and the rest of
+    # the suite's DB-agnostic tests) must hold there too, not only on SQLite.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: escalate
+          POSTGRES_PASSWORD: escalate
+          POSTGRES_DB: escalate_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U escalate" --health-interval 5s
+          --health-timeout 3s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg2://escalate:escalate@localhost:5432/escalate_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -q tests/test_metrics.py -v
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t escalate .
+      - name: Container does not run as root
+        run: test "$(docker run --rm escalate id -u)" != "0"
+      - name: API starts (SQLite fallback, non-root) and answers /health
+        run: |
+          docker run -d --name esc -p 8000:8000 escalate
+          for i in $(seq 1 30); do curl -fs localhost:8000/health && exit 0; sleep 1; done
+          docker logs esc; exit 1
+
   web:
     runs-on: ubuntu-latest
     defaults:

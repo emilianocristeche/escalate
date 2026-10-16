@@ -138,5 +138,5 @@ def at_risk(
 
 @app.get("/metrics", response_model=Metrics)
 def get_metrics(db: Session = Depends(get_db)):
-    tickets = list(db.scalars(select(Ticket)))
-    return metrics.compute_metrics(tickets, _now())
+    # Aggregate queries: no ticket rows are loaded (polled every 10s).
+    return metrics.compute_metrics_db(db, _now())

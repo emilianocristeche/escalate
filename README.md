@@ -31,6 +31,8 @@ uvicorn app.main:app --reload      # http://localhost:8000/docs
 docker compose up --build          # API on :8000, Postgres on :5432
 ```
 
+The API container runs as an unprivileged user (uid 10001).
+
 ## API
 
 | Method | Path | What |
@@ -180,10 +182,15 @@ deadline; **breached** once past it. All math is on timezone-aware UTC.
 ## Tests
 
 ```bash
-pytest -q                 # 39 tests
+pytest -q                 # 42 tests
 python app/classifier.py  # zero-dependency self-check
 python app/sla.py         # zero-dependency self-check
 ```
+
+`/metrics` is computed with aggregate queries (counts, `GROUP BY`, `AVG`), so
+the dashboard's 10-second polling never loads ticket rows. `tests/test_metrics.py`
+checks the SQL against the pure reference implementation, including tickets
+exactly on the SLA boundaries; CI runs it on SQLite and on Postgres.
 
 CI runs all three on every push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
@@ -196,7 +203,7 @@ app/
   benchmark.py        rules vs LLM vs hybrid, markdown table
   eval_data.py        30 labeled tickets for the benchmark
   sla.py              deadline + breach-risk math (pure, self-checking)
-  metrics.py          aggregation over a ticket list (pure)
+  metrics.py          /metrics via aggregate SQL (+ pure reference version)
   models.py           SQLAlchemy Ticket
   schemas.py          Pydantic request/response
   db.py               engine/session (Postgres or SQLite)
