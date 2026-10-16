@@ -19,8 +19,8 @@ jobs:
       - run: python -m app.benchmark --mock-llm   # benchmark harness smoke
 
   postgres:
-    # Production runs on Postgres: the aggregate /metrics SQL (and the rest of
-    # the suite's DB-agnostic tests) must hold there too, not only on SQLite.
+    # Production runs on Postgres: the aggregate /metrics SQL and the demo seed
+    # (advisory lock vs concurrent startups) must hold there too, not only on SQLite.
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -41,7 +41,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
-      - run: pytest -q tests/test_metrics.py -v
+      - run: pytest -q tests/test_metrics.py tests/test_demo_seed.py -v
 
   docker:
     runs-on: ubuntu-latest
