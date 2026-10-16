@@ -1,5 +1,10 @@
-# Render blueprint — deploys the API (Docker) + a free Postgres.
+# Render blueprint — deploys the API (Docker) as a self-contained public demo.
 # In the Render dashboard: New → Blueprint → point at this repo.
+#
+# The demo needs no database service and no credentials: it runs on an
+# ephemeral SQLite file inside the container, reseeded with synthetic tickets
+# on every boot, and rejects all writes. Real deployments point DATABASE_URL
+# at Postgres instead (CI-tested; see README "Deployment").
 services:
   - type: web
     name: escalate-api
@@ -9,18 +14,12 @@ services:
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: escalate-db
-          property: connectionString
+        value: sqlite:////tmp/escalate-demo.db   # ephemeral: wiped on every deploy/restart
       - key: CORS_ORIGINS
-        sync: false   # set to your Vercel dashboard URL, e.g. https://escalate-alpha.vercel.app
+        value: https://escalate-alpha.vercel.app   # the public dashboard
       - key: ESCALATE_TRUST_PROXY
         value: "true"   # Render is a reverse proxy: rate-limit by X-Forwarded-For
-      - key: ESCALATE_ENABLE_LLM
-        value: "false"  # LLM classifier stays off unless explicitly enabled
       - key: ESCALATE_READ_ONLY
-        sync: false   # "true" makes the public deploy a read-only demo
-
-databases:
-  - name: escalate-db
-    plan: free
+        value: "true"   # public demo: reject all writes; fixed so a Blueprint sync can't reopen it
+      - key: ESCALATE_SEED_DEMO
+        value: "true"   # reseed the synthetic demo tickets on every boot

@@ -182,7 +182,7 @@ deadline; **breached** once past it. All math is on timezone-aware UTC.
 ## Tests
 
 ```bash
-pytest -q                 # 42 tests
+pytest -q                 # 56 tests (+1 Postgres-only, skipped on SQLite)
 python app/classifier.py  # zero-dependency self-check
 python app/sla.py         # zero-dependency self-check
 ```
@@ -190,7 +190,8 @@ python app/sla.py         # zero-dependency self-check
 `/metrics` is computed with aggregate queries (counts, `GROUP BY`, `AVG`), so
 the dashboard's 10-second polling never loads ticket rows. `tests/test_metrics.py`
 checks the SQL against the pure reference implementation, including tickets
-exactly on the SLA boundaries; CI runs it on SQLite and on Postgres.
+exactly on the SLA boundaries; CI runs it on SQLite and on Postgres, together
+with `tests/test_demo_seed.py` (including concurrent startups on Postgres).
 
 CI runs all three on every push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
@@ -208,8 +209,9 @@ app/
   schemas.py          Pydantic request/response
   db.py               engine/session (Postgres or SQLite)
   main.py             FastAPI routes + CORS
-  seed.py             synthetic seed data
-tests/                classifier / sla / api
+  seed.py             synthetic seed data (manual: python -m app.seed)
+  demo_seed.py        demo tickets, refreshed on every boot (ESCALATE_SEED_DEMO)
+tests/                classifier / sla / api / metrics / demo seed
 web/                  React + Vite dashboard
 ```
 
@@ -226,6 +228,7 @@ API is hardened through environment variables:
 | `ESCALATE_RATE_WINDOW_SEC` | `60` | Window for the limit above. |
 | `ESCALATE_TRUST_PROXY` | `false` | `true` behind a reverse proxy (Render): the client IP is the **last** `X-Forwarded-For` entry, so a client-sent header can't dodge the limit. |
 | `ESCALATE_ENABLE_LLM` | `false` | The LLM classifier only runs with this set to `true` (plus a key). |
+| `ESCALATE_SEED_DEMO` | `false` | `true` replaces the synthetic `demo-acct-*` tickets with a fresh set on every startup (timestamps relative to now). Other tickets are never touched. |
 
 Also: `POST /tickets` rejects unknown fields (including `created_at`) and caps
 `body` at 5000 characters. No HTTP endpoint calls the LLM today; it's used only
@@ -235,14 +238,37 @@ Known limits: CORS is enforced by browsers, not by scripts or `curl`, so it is
 not access control by itself. The rate limiter keeps its counters in memory,
 per process; with several workers or instances, each one counts separately.
 
-## Deploy
+## Deployment
 
-- **API → Render:** `render.yaml` blueprint provisions the Docker web service +
-  a free Postgres. New → Blueprint → point at this repo. After it's live, set
-  `CORS_ORIGINS` to your dashboard URL (and `ESCALATE_READ_ONLY=true` for a
-  read-only public demo).
-- **Dashboard → Vercel:** import the repo, set root directory to `web/`, add env
-  `VITE_API_URL=<your Render API URL>`. `web/vercel.json` handles the build.
+**Production-ready on Postgres (CI-tested). Public demo runs on ephemeral
+SQLite, reseeded on every boot, read-only.**
+
+- **Production → Postgres.** Point `DATABASE_URL` at any Postgres (managed
+  ones like Neon work as-is): `postgres://` / `postgresql://` URLs are pinned
+  to the psycopg2 driver, `sslmode=require` is added for `*.neon.tech` hosts if
+  missing, and `pool_pre_ping` absorbs connections dropped by an idle database.
+  Tables are created on startup (`create_all`) under a Postgres advisory lock.
+  CI runs the metrics SQL and the demo seed (including concurrent startups)
+  against a real Postgres.
+- **Public demo API → Render** (`escalate-api`, fully defined in
+  [`render.yaml`](render.yaml), no database service, no secrets):
+  `DATABASE_URL=sqlite:////tmp/escalate-demo.db` inside the container, one
+  uvicorn worker, `ESCALATE_READ_ONLY=true`, `ESCALATE_SEED_DEMO=true`, CORS
+  limited to the dashboard, client IP from `X-Forwarded-For`.
+- **Dashboard → Vercel**: root directory `web/`, env
+  `VITE_API_URL=<Render API URL>`; `web/vercel.json` handles the build.
+
+**Demo seed.** With `ESCALATE_SEED_DEMO=true`, every boot deletes the 18
+synthetic `demo-acct-*` tickets and inserts them again with timestamps relative
+to now (mixed P1–P4, some about to breach, one breached, some resolved), so the
+demo never ages. Other tickets are never touched. Delete + insert run in one
+transaction (under the advisory lock on Postgres), so restarts and parallel
+workers never duplicate data.
+
+**Cold start.** Render's free instance sleeps after 15 minutes idle; the first
+request then waits while it boots. The dashboard shows *"Waking up demo API
+(free tier, ~30–60 s)…"* instead of empty counters and retries until the API
+answers (*"API unreachable"* if it never does).
 
 ## Roadmap
 
