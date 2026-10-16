@@ -68,3 +68,15 @@ def test_cors_allows_only_configured_origins(client):
 def test_oversized_body_rejected(client):
     r = client.post("/tickets", json={"subject": "x", "body": "a" * 5001})
     assert r.status_code == 422
+
+
+def test_every_response_carries_read_only_header(client, monkeypatch):
+    assert client.get("/tickets").headers["x-read-only"] == "false"
+    monkeypatch.setenv("ESCALATE_READ_ONLY", "true")
+    assert client.get("/tickets").headers["x-read-only"] == "true"
+    assert client.get("/metrics").headers["x-read-only"] == "true"
+
+
+def test_read_only_header_is_readable_cross_origin(client):
+    r = client.get("/tickets", headers={"Origin": "http://localhost:5173"})
+    assert "x-read-only" in r.headers.get("access-control-expose-headers", "").lower()

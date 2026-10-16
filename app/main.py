@@ -8,6 +8,8 @@ Routes:
   GET  /metrics            aggregate queue health
   GET  /health             liveness probe (+ whether the API is read-only)
 
+Every response carries X-Read-Only: true|false (exposed to the browser via CORS).
+
 Writes go through security.guard_write: rate-limited per client IP and
 disabled entirely when ESCALATE_READ_ONLY=true. With ESCALATE_SEED_DEMO=true,
 startup fills an empty tickets table with synthetic demo data.
@@ -62,7 +64,17 @@ app.add_middleware(
     allow_origins=_origins,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
+    expose_headers=["X-Read-Only"],
 )
+
+
+@app.middleware("http")
+async def read_only_header(request, call_next):
+    # The dashboard learns read-only mode from any data response (it does not
+    # call /health, which some browser blockers drop).
+    response = await call_next(request)
+    response.headers["X-Read-Only"] = "true" if security.read_only() else "false"
+    return response
 
 
 @app.get("/health")

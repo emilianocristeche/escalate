@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import {
-  getHealth,
   getMetrics,
   getAtRisk,
   getTickets,
@@ -47,13 +46,11 @@ export default function App() {
     if (inFlight.current) return; // a cold-start request may still be pending
     inFlight.current = true;
     try {
-      const [h, m, ar, ts] = await Promise.all([
-        getHealth(),
-        getMetrics(),
-        getAtRisk(),
-        getTickets(),
-      ]);
-      setReadOnly(Boolean(h.read_only));
+      // /tickets first: its answer is the signal that the API is awake (no
+      // /health call, see api.js). Then the rest, so nothing renders as zeros.
+      const { tickets: ts, readOnly: ro } = await getTickets();
+      const [m, ar] = await Promise.all([getMetrics(), getAtRisk()]);
+      if (ro !== null) setReadOnly(ro);
       setMetrics(m);
       setAtRisk(ar);
       setTickets(ts);
