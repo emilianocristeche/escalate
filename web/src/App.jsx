@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   getHealth,
   getMetrics,
@@ -9,6 +9,15 @@ import {
 } from "./api.js";
 
 const SEV_CLASS = { P1: "sev-p1", P2: "sev-p2", P3: "sev-p3", P4: "sev-p4" };
+
+// Until the API answers for the first time the dashboard shows no numbers
+// (zeros would look like an empty queue). After WAKE_NOTICE_MS without an
+// answer it explains the free-tier cold start and keeps retrying; after
+// WAKE_GIVE_UP_MS it reports the API as unreachable (and still retries).
+const WAKE_NOTICE_MS = 3000;
+const WAKE_GIVE_UP_MS = 120000;
+const RETRY_MS = 5000;
+const POLL_MS = 10000;
 
 function Stat({ label, value, warn }) {
   return (
@@ -28,31 +37,54 @@ export default function App() {
   const [actionError, setActionError] = useState(null);
   // The API reports read-only mode (public demo); hide write controls then.
   const [readOnly, setReadOnly] = useState(false);
-
-  useEffect(() => {
-    getHealth().then((h) => setReadOnly(Boolean(h.read_only))).catch(() => {});
-  }, []);
+  // connecting -> (waking) -> ready; "down" if the first answer never comes.
+  const [phase, setPhase] = useState("connecting");
+  const loaded = useRef(false);
+  const inFlight = useRef(false);
+  const startedAt = useRef(Date.now());
 
   const refresh = useCallback(async () => {
+    if (inFlight.current) return; // a cold-start request may still be pending
+    inFlight.current = true;
     try {
-      const [m, ar, ts] = await Promise.all([
+      const [h, m, ar, ts] = await Promise.all([
+        getHealth(),
         getMetrics(),
         getAtRisk(),
         getTickets(),
       ]);
+      setReadOnly(Boolean(h.read_only));
       setMetrics(m);
       setAtRisk(ar);
       setTickets(ts);
       setError(null);
+      loaded.current = true;
+      setPhase("ready");
     } catch (e) {
       setError(e.message);
+      if (!loaded.current) {
+        setPhase(Date.now() - startedAt.current > WAKE_GIVE_UP_MS ? "down" : "waking");
+      }
+    } finally {
+      inFlight.current = false;
     }
   }, []);
 
   useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, 10000); // poll every 10s
-    return () => clearInterval(id);
+    const notice = setTimeout(() => {
+      if (!loaded.current) setPhase((p) => (p === "connecting" ? "waking" : p));
+    }, WAKE_NOTICE_MS);
+    let timer;
+    const loop = async () => {
+      await refresh();
+      // Retry quickly until the API has answered once, then poll normally.
+      timer = setTimeout(loop, loaded.current ? POLL_MS : RETRY_MS);
+    };
+    loop();
+    return () => {
+      clearTimeout(notice);
+      clearTimeout(timer);
+    };
   }, [refresh]);
 
   async function onCreate(e) {
@@ -85,7 +117,14 @@ export default function App() {
         <span className="sub">support queue · SLA early warning</span>
       </header>
 
-      {error && <div className="error">API unreachable: {error}</div>}
+      {phase === "waking" && (
+        <div className="waking" role="status">
+          Waking up demo API (free tier, ~30–60 s)…
+        </div>
+      )}
+      {(phase === "down" || (phase === "ready" && error)) && (
+        <div className="error">API unreachable{error ? `: ${error}` : ""}</div>
+      )}
       {actionError && <div className="error">Action failed: {actionError}</div>}
       {readOnly && <div className="readonly">Read-only demo: creating and resolving tickets is disabled.</div>}
 
@@ -100,7 +139,7 @@ export default function App() {
         </section>
       )}
 
-      {!readOnly && (
+      {phase === "ready" && !readOnly && (
         <form className="new" onSubmit={onCreate}>
           <input
             value={subject}
@@ -111,48 +150,52 @@ export default function App() {
         </form>
       )}
 
-      <section>
-        <h2>At risk ({atRisk.length})</h2>
-        {atRisk.length === 0 ? (
-          <p className="empty">Nothing breaching soon. 🎉</p>
-        ) : (
-          <ul className="risk">
-            {atRisk.map((t) => (
-              <li key={t.id}>
-                <span className={`badge ${SEV_CLASS[t.severity]}`}>{t.severity}</span>
-                <span className="risk-subj">{t.subject}</span>
-                <span className="risk-mtb">breach in {t.minutes_to_breach}m</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {phase === "ready" && (
+        <>
+        <section>
+          <h2>At risk ({atRisk.length})</h2>
+          {atRisk.length === 0 ? (
+            <p className="empty">Nothing breaching soon. 🎉</p>
+          ) : (
+            <ul className="risk">
+              {atRisk.map((t) => (
+                <li key={t.id}>
+                  <span className={`badge ${SEV_CLASS[t.severity]}`}>{t.severity}</span>
+                  <span className="risk-subj">{t.subject}</span>
+                  <span className="risk-mtb">breach in {t.minutes_to_breach}m</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
-      <section>
-        <h2>Queue ({tickets.length})</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Sev</th><th>Category</th><th>Subject</th><th>Status</th><th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {tickets.map((t) => (
-              <tr key={t.id} className={t.resolved ? "row-resolved" : ""}>
-                <td><span className={`badge ${SEV_CLASS[t.severity]}`}>{t.severity}</span></td>
-                <td>{t.category}</td>
-                <td>{t.subject}</td>
-                <td>{t.resolved ? "resolved" : "open"}</td>
-                <td>
-                  {!t.resolved && !readOnly && (
-                    <button className="link" onClick={() => onResolve(t.id)}>resolve</button>
-                  )}
-                </td>
+        <section>
+          <h2>Queue ({tickets.length})</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Sev</th><th>Category</th><th>Subject</th><th>Status</th><th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+            </thead>
+            <tbody>
+              {tickets.map((t) => (
+                <tr key={t.id} className={t.resolved ? "row-resolved" : ""}>
+                  <td><span className={`badge ${SEV_CLASS[t.severity]}`}>{t.severity}</span></td>
+                  <td>{t.category}</td>
+                  <td>{t.subject}</td>
+                  <td>{t.resolved ? "resolved" : "open"}</td>
+                  <td>
+                    {!t.resolved && !readOnly && (
+                      <button className="link" onClick={() => onResolve(t.id)}>resolve</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+        </>
+      )}
     </div>
   );
 }
