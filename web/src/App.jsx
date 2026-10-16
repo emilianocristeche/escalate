@@ -167,7 +167,7 @@ export default function App() {
         </section>
 
         <section>
-          <h2>Queue ({tickets.length})</h2>
+          <h2>Tickets ({tickets.length} · {tickets.filter((t) => !t.resolved).length} open)</h2>
           <table>
             <thead>
               <tr>
