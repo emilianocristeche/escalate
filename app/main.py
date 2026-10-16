@@ -9,7 +9,8 @@ Routes:
   GET  /health             liveness probe (+ whether the API is read-only)
 
 Writes go through security.guard_write: rate-limited per client IP and
-disabled entirely when ESCALATE_READ_ONLY=true.
+disabled entirely when ESCALATE_READ_ONLY=true. With ESCALATE_SEED_DEMO=true,
+startup fills an empty tickets table with synthetic demo data.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import classifier, metrics, security, sla
+from app import classifier, demo_seed, metrics, security, sla
 from app.db import get_db, init_db
 from app.models import Ticket
 from app.schemas import Metrics, TicketCreate, TicketOut, TicketRisk
@@ -37,6 +38,9 @@ def _now() -> datetime:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # Public demo: never start with an empty queue (see app/demo_seed.py).
+    if security.env_flag("ESCALATE_SEED_DEMO"):
+        demo_seed.seed_demo()
     yield
 
 
